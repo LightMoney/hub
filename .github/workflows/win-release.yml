@@ -23,7 +23,7 @@ jobs:
           while read os arch; do
             [ -n "$os" ] || continue
             GOOS="$os" GOARCH="$arch" LDFLAGS="-s -w" script/build -o bin/hub
-            tar czf "tmp/hub-${os}-${arch}-2.15.0.tgz" --exclude '*.md' -- bin/hub LICENSE etc share
+            tar -czf "tmp/hub-${os}-${arch}-2.15.0.tgz" --exclude '*.md' -- bin/hub LICENSE etc share
           done <<<"
             linux    amd64
             linux    386
@@ -74,7 +74,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p tmp
-          tar czf tmp/hub-darwin-amd64-2.15.0.tgz --exclude '*.md' -- bin/hub LICENSE etc share
+          tar -czf tmp/hub-darwin-amd64-2.15.0.tgz --exclude '*.md' -- bin/hub LICENSE etc share
 
       - name: Store artifact
         uses: actions/upload-artifact@v2
@@ -105,8 +105,8 @@ jobs:
           name: macos-packages
 
       - name: Extract man pages
-        shell: bash
-        run: tar xzf hub-darwin-amd64-*.tgz share
+        shell: powershell
+        run: tar -xvzf hub-darwin-amd64-*.tgz share
 
       - name: Obtain signing cert
         id: obtain_cert
@@ -142,6 +142,14 @@ jobs:
 
           New-Item -Name tmp -ItemType Directory -Force >$null
           Compress-Archive -Path bin\hub.exe -DestinationPath tmp\hub-windows-amd64-2.15.0.zip
+
+          & "${env:WIX}\bin\candle" script\windows-msi.wxs.tmpl -out tmp\hub.wixobj -arch x64
+          if (-not $?) { throw 'candle failed' }
+
+          & "${env:WIX}\bin\light" tmp\hub.wixobj -out tmp\hub-windows-amd64-2.15.0.msi
+          if (-not $?) { throw 'light failed' }
+
+          Sign-Executable -File tmp\hub-windows-amd64-2.15.0.msi -Description "hub installer"
         env:
           CGO_ENABLED: 1
           CERT_FILE: ${{ steps.obtain_cert.outputs.cert-file }}
@@ -153,8 +161,8 @@ jobs:
         with:
           name: windows-packages
           path: |
-            tmp/*.zip
-            tmp/*.msi
+            tmp/hub-*.zip
+            tmp/hub-*.msi
 
   release:
     needs: [linux, macos, windows]
