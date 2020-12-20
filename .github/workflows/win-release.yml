@@ -8,19 +8,21 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: "^1.14.4"
+          go-version: "1.15"
 
       - name: Checkout
         uses: actions/checkout@v2
 
       - name: Build and package
+        env:
+          CGO_ENABLED: 0
         run: |
           make man-pages
           mkdir -p tmp
 
           while read os arch; do
             [ -n "$os" ] || continue
-            GOOS="$os" GOARCH="$arch" script/build -o bin/hub
+            GOOS="$os" GOARCH="$arch" LDFLAGS="-s -w" script/build -o bin/hub
             tar czf "tmp/hub-${os}-${arch}-2.15.0.tgz" --exclude '*.md' -- bin/hub LICENSE etc share
           done <<<"
             linux    amd64
@@ -43,7 +45,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: "^1.14.4"
+          go-version: "1.15"
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -56,7 +58,11 @@ jobs:
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
 
       - name: Build
-        run: make bin/hub man-pages
+        env:
+          CGO_ENABLED: 1
+        run:
+          LDFLAGS="-s -w" make bin/hub
+          make man-pages
 
       - name: Sign binary
         run: |
@@ -79,62 +85,59 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - name: Install go-msi
-        run: choco install -y go-msi
-
       - name: Prepare PATH
-        shell: bash
+        shell: powershell
         run: |
-          echo "::add-path::$WIX\\bin"
-          echo '::add-path::C:\Program Files\go-msi'
-          echo '::add-path::C:\Program Files (x86)\Windows Kits\10\bin\10.0.17763.0\x86'
+          $kits = dir 'C:\Program Files (x86)\Windows Kits\10\bin\*\x86'
+          echo $kits[0].FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "${env:WIX}bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: "^1.14.4"
+          go-version: "1.15"
 
       - name: Checkout
         uses: actions/checkout@v2
 
       - name: Obtain signing cert
-        shell: bash
+        id: obtain_cert
+        shell: powershell
         run: |
-          curl -fsSLO https://api.github.com/repos/desktop/desktop-secrets/contents/windows-certificate.pfx \
-            -H "Authorization: token $DESKTOP_CERT_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw"
+          $certURL = 'https://api.github.com/repos/desktop/desktop-secrets/contents/windows-certificate.pfx'
+          $certFile = 'windows-certificate.pfx'
+
+          $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+          $headers.Add("Authorization", "token $env:DESKTOP_CERT_TOKEN")
+          $headers.Add("Accept", 'application/vnd.github.v3.raw')
+
+          Invoke-WebRequest $certURL -Headers $headers -OutFile $certFile
+          "::set-output name={0}::{1}" -f "cert-file", $certFile
         env:
           DESKTOP_CERT_TOKEN: ${{ secrets.DESKTOP_CERT_TOKEN }}
 
       - name: Build, sign, and package
-        shell: bash
+        shell: powershell
         run: |
-          sign() {
-            signtool sign /d "hub CLI" /f windows-certificate.pfx /p "$GITHUB_CERT_PASSWORD" \
-              /sha1 "$CERT_THUMBPRINT" /fd sha256 /tr http://timestamp.digicert.com /td sha256 /v "$1"
+          function Sign-Executable {
+            param (
+                [string]$File,
+                [string]$Description = ""
+            )
+            $signtool = dir 'C:\Program Files (x86)\Windows Kits\10\bin\*\x86\signtool.exe'
+            & $signtool[0] sign /d $Description /f $env:CERT_FILE /p $env:CERT_PASSWORD `
+                /sha1 $env:CERT_THUMBPRINT /fd sha256 /tr http://timestamp.digicert.com /td sha256 /v $File
           }
 
-          make man-pages
-          rm -rf share/{man,vim}
+          go build -o bin\hub.exe -ldflags "-X github.com/github/hub/v2/version.Version=2.15.0 -s -w"
+          Sign-Executable -File bin\hub.exe -Description "hub CLI"
 
-          for arch in amd64 386; do
-            GOARCH="$arch" script/build -o bin/hub.exe
-
-            release="hub-windows-${arch}-2.15.0"
-            tmpdir="tmp/build"
-            rm -rf "$tmpdir"
-            mkdir -p "$tmpdir"
-            msi="tmp/${release}.msi"
-            zipfile="tmp/${release}.zip"
-            rm -f "$zipfile"
-            
-            go-msi make --msi "$PWD/$msi" --out "$PWD/$tmpdir" --version 2.15.0
-            sign "$msi"
-            sign bin/hub.exe
-            zip "$zipfile" bin/hub.exe share/doc/*/*.html
-          done
+          New-Item -Name tmp -ItemType Directory -Force
+          Compress-Archive -Path bin\hub.exe -DestinationPath tmp/hub-windows-amd64-2.15.0.zip
         env:
-          GITHUB_CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
+          CGO_ENABLED: 1
+          CERT_FILE: ${{ steps.obtain_cert.outputs.cert-file }}
+          CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
           CERT_THUMBPRINT: fb713a60a7fa79dfc03cb301ca05d4e8c1bdd431
 
       - name: Store artifacts
