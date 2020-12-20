@@ -36,7 +36,7 @@ jobs:
       - name: Store artifacts
         uses: actions/upload-artifact@v2
         with:
-          name: packages
+          name: linux-packages
           path: tmp/hub-*.tgz
 
   macos:
@@ -60,7 +60,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: 1
-        run:
+        run: |
           LDFLAGS="-s -w" make bin/hub
           make man-pages
 
@@ -79,17 +79,16 @@ jobs:
       - name: Store artifact
         uses: actions/upload-artifact@v2
         with:
-          name: packages
+          name: macos-packages
           path: tmp/hub-*.tgz
 
   windows:
+    needs: macos
     runs-on: windows-latest
     steps:
       - name: Prepare PATH
         shell: powershell
         run: |
-          $kits = dir 'C:\Program Files (x86)\Windows Kits\10\bin\*\x86'
-          echo $kits[0].FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "${env:WIX}bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Go
@@ -99,6 +98,15 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v2
+
+      - name: Fetch generated man pages
+        uses: actions/download-artifact@v2
+        with:
+          name: macos-packages
+
+      - name: Extract man pages
+        shell: bash
+        run: tar xzf hub-darwin-amd64-*.tgz share
 
       - name: Obtain signing cert
         id: obtain_cert
@@ -126,14 +134,14 @@ jobs:
             )
             $signtool = dir 'C:\Program Files (x86)\Windows Kits\10\bin\*\x86\signtool.exe'
             & $signtool[0] sign /d $Description /f $env:CERT_FILE /p $env:CERT_PASSWORD `
-                /sha1 $env:CERT_THUMBPRINT /fd sha256 /tr http://timestamp.digicert.com /td sha256 /v $File
+                /sha1 $env:CERT_THUMBPRINT /fd sha256 /tr http://timestamp.digicert.com /td sha256 /q $File
           }
 
           go build -o bin\hub.exe -ldflags "-X github.com/github/hub/v2/version.Version=2.15.0 -s -w"
           Sign-Executable -File bin\hub.exe -Description "hub CLI"
 
-          New-Item -Name tmp -ItemType Directory -Force
-          Compress-Archive -Path bin\hub.exe -DestinationPath tmp/hub-windows-amd64-2.15.0.zip
+          New-Item -Name tmp -ItemType Directory -Force >$null
+          Compress-Archive -Path bin\hub.exe -DestinationPath tmp\hub-windows-amd64-2.15.0.zip
         env:
           CGO_ENABLED: 1
           CERT_FILE: ${{ steps.obtain_cert.outputs.cert-file }}
@@ -143,8 +151,10 @@ jobs:
       - name: Store artifacts
         uses: actions/upload-artifact@v2
         with:
-          name: packages
-          path: tmp/*.{msi,zip}
+          name: windows-packages
+          path: |
+            tmp/*.zip
+            tmp/*.msi
 
   release:
     needs: [linux, macos, windows]
@@ -153,8 +163,6 @@ jobs:
     steps:
       - name: Collect artifacts
         uses: actions/download-artifact@v2
-        with:
-          name: packages
 
       - name: debug
         run: ls -R
