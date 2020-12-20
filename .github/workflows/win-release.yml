@@ -106,7 +106,7 @@ jobs:
 
       - name: Extract man pages
         shell: powershell
-        run: tar -xvzf hub-darwin-amd64-*.tgz share
+        run: tar -xvzf $(dir 'hub-darwin-amd64-*.tgz') share
 
       - name: Obtain signing cert
         id: obtain_cert
